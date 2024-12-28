@@ -240,7 +240,7 @@ class Processor:
 
     def support_set_sampling(self, dataset, k_shot=1, sample_split='train'):
         """
-        Sample k-shot support set from the dataset split.
+        Sample k-shot support set (only data index) from the dataset split.
         The sampled support set contains at least K examples for each of the labels.
         Refer to in the Support Set Sampling Algorithm in the Appendix B (P12) of the paper https://arxiv.org/abs/2203.08985
         or in the Algorithm 1 in the A.2 (P14) of the paper https://arxiv.org/abs/2303.08559
@@ -374,10 +374,15 @@ class Processor:
 
         return dataset_subset
 
-    def preprocess(self, seed=22):
+    def preprocess(self, seed=22, k_shot=-1):
         """
         Pre-process the dataset.
         :param seed: the seed for random sampling. If None, a random seed will be used.
+        :param k_shot: sample and return a k-shot support set.
+            If k_shot > 0, the support set will be returned as train split.
+            Else, the preprocessed dataset original train split will be returned .
+        :return: the preprocessed dataset.
+
         """
         # 0. init config
         preprocessed_dir = os.path.join(self.data_cfg['preprocessed_dir'], f'span_{self.natural_flag}')
@@ -390,63 +395,88 @@ class Processor:
         # 1. check and load the cached formatted dataset
         try:
             logger.info('Try to load the preprocessed dataset from the cache...')
-            preprocessed_dataset = load_from_disk(preprocessed_dir)
+            dataset = load_from_disk(preprocessed_dir)
         except FileNotFoundError:
-            # 2. format datasets
             logger.info('No cache found, start to preprocess the dataset...')
 
-            preprocessed_dataset = load_dataset(self.data_cfg['file_path'], num_proc=self.data_cfg['num_proc'], trust_remote_code=True)
+            # 2. preprocess data
+            # load dataset
+            dataset = load_dataset(self.data_cfg['file_path'], num_proc=self.data_cfg['num_proc'], trust_remote_code=True)
 
-            tokens_filed, ner_tags_field = self.data_cfg['tokens_field'], self.data_cfg['ner_tags_field']
+            # 2.1. For flat dataset, filter out those instances with different length of tokens and tags
             if not self.data_cfg['nested']:
                 # for those flat datasets, we need to filter out those instances with different length of tokens and tags
-                preprocessed_dataset = preprocessed_dataset.filter(lambda x: len(x[tokens_filed]) == len(x[ner_tags_field]) )
-            preprocessed_dataset = preprocessed_dataset.map(self.data_format_span,
-                                                            batched=True,
-                                                            batch_size=self.data_cfg['data_batch_size'],
-                                                            num_proc=self.data_cfg['num_proc'])
+                tokens_filed, ner_tags_field = self.data_cfg['tokens_field'], self.data_cfg['ner_tags_field']
+                dataset = dataset.filter(
+                    lambda x: len(x[tokens_filed]) == len(x[ner_tags_field]))
 
-            # add index column
-            preprocessed_dataset = preprocessed_dataset.map(lambda example, index: {"id": index}, with_indices=True)  # add index column
+            # 2.2. add index column
+            dataset = dataset.map(
+                lambda example, index: {"id": index},
+                with_indices=True
+            )
 
-        # 3. sample the support set
-        if self.data_cfg['support_set']:
+            # 2.3. format the spans and labels
+            dataset = dataset.map(
+                self.data_format_span,
+                batched=True,
+                batch_size=self.data_cfg['data_batch_size'],
+                num_proc=self.data_cfg['num_proc']
+            )
+
+            # 3. shuffle, split
+            if 'validation' in dataset.keys() and 'test' not in dataset.keys():
+                # split the origianl 'valid' dataset into 'valid' and 'test' datasets
+                valid_test_split = dataset['validation'].train_test_split(test_size=0.5, seed=seed)
+                dataset['validation'] = valid_test_split['train']
+                dataset['test'] = valid_test_split['test']
+
+            # 4. check the cached result
+            if not os.path.exists(preprocessed_dir):
+                os.makedirs(self.data_cfg['preprocessed_dir'])
+            dataset.save_to_disk(preprocessed_dir)
+
+        # 2. sample the support set
+        if k_shot > 0:
             if not os.path.exists(ss_cache_dir):
                 os.makedirs(ss_cache_dir)
 
-            for k_shot in self.data_cfg['k_shot']:
-                cache_ss_file_name = '{}_support_set_{}_shot.jsonl'.format(self.data_cfg['sample_split'], k_shot)
-                cache_counter_file_name = '{}_counter_{}_shot.txt'.format(self.data_cfg['sample_split'], k_shot)
-                support_set_file = os.path.join(ss_cache_dir, cache_ss_file_name)
-                counter_file = os.path.join(ss_cache_dir, cache_counter_file_name)
+            cache_ss_file_name = 'support_set_{}_shot.jsonl'.format(k_shot)
+            cache_counter_file_name = 'counter_{}_shot.txt'.format(k_shot)
+            support_set_file = os.path.join(ss_cache_dir, cache_ss_file_name)
+            counter_file = os.path.join(ss_cache_dir, cache_counter_file_name)
 
-                # check and load the cache
-                if not os.path.exists(support_set_file):
-                # 3.2 sample support set from scratch
+            # check and load the cache
+            if not os.path.exists(support_set_file):
+                # sample support set from scratch
+                # get support set (only data index) and counter
+                support_set, counter = self.support_set_sampling(dataset, k_shot)
 
-                    support_set, counter = self.support_set_sampling(preprocessed_dataset, k_shot, self.data_cfg['sample_split'])
-                    # cache the support set
-                    with jsonlines.open(support_set_file, mode='w') as writer:
-                        for idx in support_set:
-                            tokens = preprocessed_dataset[self.data_cfg['sample_split']]['tokens'][idx]
-                            spans_labels = preprocessed_dataset[self.data_cfg['sample_split']]['spans_labels'][idx]
-                            writer.write({'id': idx, 'tokens': tokens, 'spans_labels': spans_labels})
+                # cache the support set
+                with jsonlines.open(support_set_file, mode='w') as writer:
+                    for idx in support_set:
+                        tokens = dataset['train']['tokens'][idx]
+                        spans_labels = dataset['train']['spans_labels'][idx]
+                        tgt_sequence = dataset['train']['tgt_sequence'][idx]
+                        writer.write({
+                            'id': idx,
+                            'tokens': tokens,
+                            'spans_labels': spans_labels,
+                            'tgt_sequence': tgt_sequence,
+                        })
 
-                    # cache the counter
-                    with open(counter_file, 'w') as writer:
-                        for k, v in counter.items():
-                            writer.write(f'{k}: {v}\n')
+                # cache the counter
+                with open(counter_file, 'w') as writer:
+                    for k, v in counter.items():
+                        writer.write(f'{k}: {v}\n')
 
-        # 4. shuffle, split
-        if 'validation' in preprocessed_dataset.keys() and 'test' not in preprocessed_dataset.keys():
-            # split the origianl 'valid' dataset into 'valid' and 'test' datasets
-            valid_test_split = preprocessed_dataset['validation'].train_test_split(test_size=0.5, seed=seed)
-            preprocessed_dataset['validation'] = valid_test_split['train']
-            preprocessed_dataset['test'] = valid_test_split['test']
+                # get the support set data
+                support_set_data = dataset['train'].select(list(support_set))
+            else:
+                # load the cached support set
+                # load_dataset return a DatasetDict, we need to get the 'train' split
+                support_set_data = load_dataset('json', data_files=support_set_file)['train']
 
-        # 5. check the cached result
-        if not os.path.exists(preprocessed_dir):
-            os.makedirs(self.data_cfg['preprocessed_dir'])
-            preprocessed_dataset.save_to_disk(preprocessed_dir)
+            dataset['train'] = support_set_data  # replace the original train split with the support set
 
-        return preprocessed_dataset
+        return dataset

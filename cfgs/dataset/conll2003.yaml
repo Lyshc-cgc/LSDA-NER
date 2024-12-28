@@ -2,7 +2,7 @@
 
 dataset_name: conll2003
 file_path: data/conll2003/conll2003.py
-num_proc: 6  # the number of processes to preprocess the data
+num_proc: 4  # the number of processes to preprocess the data
 nested: False  # whether the entities are nested
 
 # process config
@@ -11,17 +11,6 @@ ner_tags_field: ner_tags  # the field name of the NER tag, please make sure the 
 data_batch_size: 4096 # batch size for data processing
 shuffle: True  # whether to shuffle the data
 preprocessed_dir: data/conll2003/preprocess  # the directory to store the preprocessed data
-continue: True  # whether to continue to use the data last time
-continue_dir: data/conll2003/continue  # the directory to store the continued data to be annotated
-
-# few-shot settings
-support_set: True  # whether to sample support set
-k_shot:  # the number of examples for each label in the training set
-  - 20
-  - 10
-  - 5
-#  - 1
-sample_split: train  # the dataset split you want to sample support set from.
 ss_cache_dir: data/conll2003/support_set  # the directory to store the support set cache
 
 labels:

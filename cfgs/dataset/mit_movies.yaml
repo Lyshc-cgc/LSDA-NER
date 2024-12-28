@@ -2,7 +2,7 @@
 
 dataset_name: mit_movies
 file_path: data/mit_movies/mit_movies
-num_proc: 6  # the number of processes to preprocess the data
+num_proc: 4  # the number of processes to preprocess the data
 nested: False  # whether the entities are nested
 
 # process config
@@ -11,32 +11,21 @@ ner_tags_field: ner_tags  # the field name of the NER tag, please make sure the 
 data_batch_size: 4096 # batch size for data processing
 shuffle: True  # whether to shuffle the data
 preprocessed_dir: data/mit_movies/preprocess  # the directory to store the preprocessed data
-continue: True  # whether to continue to use the data last time
-continue_dir: data/mit_movies/continue  # the directory to store the continued data to be annotated
-
-# few-shot settings
-support_set: True  # whether to sample support set
-k_shot:  # the number of examples for each label in the training set
-  - 20
-  - 10
-  - 5
-#  - 1
-sample_split: train  # the dataset split you want to sample support set from.
 ss_cache_dir: data/mit_movies/support_set  # the directory to store the support set cache
 
 labels:
-  ACTOR: Actor
-  TITLE: Title
-  YEAR: Year
-  GENRE: Genre
-  PLOT: Plot
-  DIRECTOR: Director
-  RATINGS_AVERAGE: Ratings Average
-  RATING: Rating
-  CHARACTER: Character
-  SONG: Song
-  REVIEW: Review
-  TRAILER: Trailer
+  ACTOR: actor
+  TITLE: title
+  YEAR: year
+  GENRE: genre
+  PLOT: plot
+  DIRECTOR: director
+  RATINGS_AVERAGE: ratings average
+  RATING: rating
+  CHARACTER: character
+  SONG: song
+  REVIEW: review
+  TRAILER: trailer
 
 raw_bio: True  # a flag to indicate whether the labels are in BIO format in the raw dataset.(data/*/raw/*)
 raw_label2id:  # the label2id mapping in the raw datasets. (data/*/raw/*)

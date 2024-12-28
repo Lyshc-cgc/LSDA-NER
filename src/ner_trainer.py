@@ -15,7 +15,7 @@ class NerTrainer(Seq2SeqTrainer):
         self.label2id = label2id
         self.id2label = id2label
         self.extra_data = None
-        self.compute_metrics = self.compute_custome_metrics
+        self.compute_metrics = self.compute_custom_metrics
 
     def extract_entities(self, decoded_preds: list[str], input_sents: list[str]):
         """
@@ -25,12 +25,12 @@ class NerTrainer(Seq2SeqTrainer):
         :return:
         """
         entities = []  # store the entities in a batch
-        results = [dp.split('|') for dp in decoded_preds]
-        for sent, res in zip(input_sents, results):
+        for sent, decoded_pred in zip(input_sents, decoded_preds):
+            results = decoded_pred.split('|')
             instance_entities = []  # store the entities in a sentence
-            for item in res:  # split the result by '|' to get the entities.
-                if item and item !=' ':
-                    answers = item.split(',')  # split the answers by ','. The format is 'entity_mention,entity_label'.
+            for res in results:  # split the result by '|' to get the entities.
+                if res and res !=' ':
+                    answers = res.split(',')  # split the answers by ','. The format is 'entity_mention,entity_label'.
                     if len(answers) < 2:
                         continue
                     mention, label = answers[:2]  # get the first two items, which are entity mention and entity label.
@@ -72,7 +72,7 @@ class NerTrainer(Seq2SeqTrainer):
         """
         self.extra_data = extra_data
 
-    def compute_custome_metrics(self, eval_pred):
+    def compute_custom_metrics(self, eval_pred):
         """
         Compute the confusion matrix, span-level metrics such as precision, recall and F1-micro.
         :param eval_pred: EvalPrediction object, including
@@ -85,12 +85,12 @@ class NerTrainer(Seq2SeqTrainer):
         # get needed data
         preds, label_ids = eval_pred
 
-        # if self.is_in_train:  # if in training, we need to get self.extra_data['validation'].
-        #     spans_labels = self.extra_data['validation']
-        # else:  # if in evaluation, we need to get self.extra_data['test'].
-        #     spans_labels = self.extra_data['test']
-        spans_labels = self.extra_data['span_labels']['train']
-        input_sents =  self.extra_data['input_sents']['train']
+        if self.is_in_train:  # if in training, we need to get self.extra_data['validation'].
+            spans_labels = self.extra_data['span_labels']['validation']
+            input_sents = self.extra_data['input_sents']['validation']
+        else:  # if in evaluation, we need to get self.extra_data['test'].
+            spans_labels = self.extra_data['span_labels']['test']
+            input_sents = self.extra_data['input_sents']['test']
         if isinstance(preds, tuple):
             preds = preds[0]
 
@@ -102,6 +102,12 @@ class NerTrainer(Seq2SeqTrainer):
         # extract entities from the decoded predictions and get their positions according to the input sentences.
         # pred_spans shapes like [[start, end, span, label_id], [...], ...]
         pred_spans = self.extract_entities(decoded_preds, input_sents)
+        assert len(pred_spans) == len(spans_labels), 'The number of pred_spans and spans_labels should be the same.'
+        loger.info(f'pred_spans:\n {pred_spans}')
+        loger.info(f'gold_spans:\n {spans_labels}')
+
+        # filter empty pred in the pred_spans and filter 'O' label
+        # then flatten the pred_spans
         pred_spans = [
             span
             for instance_spans in pred_spans
@@ -109,10 +115,6 @@ class NerTrainer(Seq2SeqTrainer):
             for span in instance_spans
             if int(span[-1]) != self.label2id['O']  # filter 'O' label
         ]
-        loger.info(f'pred_spans:\n {pred_spans}')
-        loger.info(f'gold_spans:\n {spans_labels}')
-        # flatten
-        pred_spans = list(itertools.chain(*pred_spans))
-        gold_spans = list(itertools.chain(*spans_labels))
+        gold_spans = list(itertools.chain(*spans_labels)) # flatten gold_spans
         result = func_util.compute_span_f1(gold_spans, pred_spans)
         return result
