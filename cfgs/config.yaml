@@ -1,11 +1,15 @@
 train: true
+test: false
 k_shot: 50  # if > 0, use k-shot learning
 seed: 22
 model_name_or_path: ./model/facebook/bart-large  # facebook/bart-large
 natural_label: False  # whether to use the natural label
 early_stopping_patience: 5  # early stopping patience
+augmentation: lsp  # lsp, baseline
+subset_size: 0.5  # subset size
+partition_times: 1  # partition times
 
 defaults:
   - _self_
-  - dataset: ace2005
-  - training_args: baseline
+  - dataset: mit_movie
+  - training_args: 5_shot

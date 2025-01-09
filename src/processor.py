@@ -8,9 +8,9 @@ import math
 import jsonlines
 import multiprocess
 
+from src import func_util
 from tqdm import tqdm
 from datasets import load_dataset, load_from_disk, Dataset
-from transformers import DataCollatorForSeq2Seq
 from transformers.utils import logging
 
 logger = logging.get_logger('Processor')
@@ -19,24 +19,26 @@ class Processor:
     """
     The Processor class is used to process the data.
     """
-    def __init__(self, data_cfg, natural_label: False):
+    def __init__(self, config, tokenizer):
         """
         Initialize the Processor class.
-        :param data_cfg: the data processing config from the config file.
-        :param natural_label: whether the labels are in natural language form.
+        :param config: the config file for running python script. config.dataset is the dataset config.
+        :param tokenizer: the tokenizer for the model.
         """
-        self.data_cfg = data_cfg
-        self.labels = data_cfg['labels']
-        self.raw_label2id = data_cfg['raw_label2id']  # the raw label2id mapping from the raw dataset.
-        self.raw_bio = data_cfg['raw_bio']  # a flag to indicate whether the labels are in BIO format in the raw dataset.
+        self.config = config
+        self.tokenizer = tokenizer
+        self.data_cfg = config.dataset
+        self.labels = self.data_cfg['labels']
+        self.raw_label2id = self.data_cfg['raw_label2id']  # the raw label2id mapping from the raw dataset.
+        self.raw_bio = self.data_cfg['raw_bio']  # a flag to indicate whether the labels are in BIO format in the raw dataset.
         self.label2id = dict()
         self.id2label = dict()
         self.covert_tag2id = dict() if self.raw_bio else None  # covert the original BIO label (tag) id to the new label id. e.g., {2:2,3:2} means 2 (B-DATE) and 3 (I-DATE) are the same (DATE, id=2).
-        if natural_label:  # use natural-language-form labels
+        if self.config.natural_label:  # use natural-language-form labels
             self.init_natural_labels()
         else:  # use simple-form labels
             self.init_simp_labels()
-        self.natural_flag = 'natural' if natural_label else 'bio'  # use natural-form or bio-form
+        self.natural_flag = 'natural' if self.config.natural_label else 'bio'  # use natural-form or bio-form
 
     def init_simp_labels(self):
         """
@@ -92,7 +94,6 @@ class Processor:
             natural_label = self.labels[label]['natural']
             self.covert_tag2id[v] = self.label2id[natural_label]
 
-
     def _get_span_and_labels(self, tokens, tags):
         """
         Get the span and span label of the sentence, given the tokens and token tags.
@@ -139,7 +140,7 @@ class Processor:
         """
 
         # init the result
-        res_tokens = []  # store the tokens of the instances
+        res_sents = []  # store the sentence of the instances
         res_spans_labels = []  # store the gold spans and labels of the instances
         res_tgt_sequence = []  # store the target sequence of the instances
 
@@ -147,7 +148,6 @@ class Processor:
         tokens_filed, ner_tags_field = self.data_cfg['tokens_field'], self.data_cfg['ner_tags_field']
         all_raw_tokens, all_raw_tags = instances[tokens_filed], instances[ner_tags_field]
         # 1. Some preparations
-
         # 1.2. covert tokens to sentence
         sents = [' '.join(raw_tokens) for raw_tokens in all_raw_tokens]
 
@@ -185,13 +185,82 @@ class Processor:
                     spans_labels.append((str(start), str(end), mention, str(label_id)))
                     tgt_sequence += '{}, {}| '.format(mention, self.id2label[int(label_id)])
 
-            res_tokens.append(' '.join(raw_tokens))
+            res_sents.append(sent)
             res_spans_labels.append(spans_labels)
             res_tgt_sequence.append(tgt_sequence)
 
         return {
-            'tokens': res_tokens,
+            'sentence': res_sents,
             'spans_labels': res_spans_labels,  # store the gold spans and labels of the instances, shape like (start, end (excluded), gold_mention_span, gold_label_id)
+            'tgt_sequence': res_tgt_sequence,  # store the target sequence of the instances for seq2seq model
+        }
+
+    def data_augmentation_by_lsp(self, instances):
+        """
+        Get the span from gold annotated spans using label subset partition.
+        :param instances: Dict[str, List], A batch of instances.
+        :return:
+        """
+
+        # init the result
+        res_sents = []  # store the sentences of the instances
+        res_spans_labels = []  # store the gold spans and labels of the instances
+        res_tgt_sequence = []  # store the target sequence of the instances
+
+        # 1. get label subset if we use 'label_subset' augmentation
+        assert 'subset_size' in self.config and 'partition_times' in self.config, \
+            '"subset_size" and "partition_times" should be provided in the kwargs for label subset partition.' \
+            'Please check the specify "subset_size" and "partition_times" parameters in config file or command line.'
+
+        all_labels = list(self.label2id.keys())
+        if 'O' in all_labels:
+            all_labels.remove('O')
+        if 0 < self.config['subset_size'] < 1:
+            subset_size = math.floor(len(all_labels) * self.config['subset_size'])
+            if subset_size < 1:
+                subset_size = 1
+        else:
+            subset_size = self.config['subset_size']
+
+        label_subsets = func_util.get_label_subsets(
+            all_labels,
+            subset_size,
+            self.config['partition_times']
+        )
+
+        # 2. process each instance
+        # an element of instances is a dict, containing the id, tokens, spans_labels and tgt_sequence
+        for raw_sentence, raw_spans_labels, raw_tgt_sequence in zip(instances['sentence'], instances['spans_labels'], instances['tgt_sequence']):
+            # add all labels
+            res_sents.append(raw_sentence + ' [all]')
+            res_spans_labels.append(raw_spans_labels)
+            res_tgt_sequence.append(raw_tgt_sequence)
+
+            # label subset partition
+            for label_subset in label_subsets:
+                tgt_sequence = ''  # store the new target sequence for this instance
+                spans_labels = []  # store the spans and labels using label subset partition
+                tokens = copy.deepcopy(raw_sentence)  # store the tokens using label subset partition
+
+                # the elements' shape of spans_labels is like [(start, end (excluded), gold_mention_span, gold_label_id)...]
+                # start, end (excluded), gold_mention_span, gold_label_id are all strings
+                for start, end, mention, label_id in raw_spans_labels:
+                    # an element in instance_spans_labels is like (start, end (excluded), gold_mention_span, gold_label_id)
+                    label = self.id2label[int(label_id)]
+                    if label in label_subset:
+                        tgt_sequence += '{}, {}| '.format(mention, label)
+                        spans_labels.append((start, end, mention, label_id))
+                if len(spans_labels) == 0:
+                    continue
+                tokens += ' [' + ' '.join(label_subset) + ']' # concat label subset to the tokens
+                res_sents.append(tokens)
+                res_spans_labels.append(spans_labels)
+                res_tgt_sequence.append(tgt_sequence)
+
+        return {
+            'sentence': res_sents,
+            'spans_labels': res_spans_labels,
+            # store the gold spans and labels of the instances, shape like (start, end (excluded), gold_mention_span, gold_label_id)
             'tgt_sequence': res_tgt_sequence,  # store the target sequence of the instances for seq2seq model
         }
 
@@ -303,6 +372,10 @@ class Processor:
         logger.info(f"Sampling {k_shot}-shot support set from {sample_split} split...")
         for label in label_nums.keys():
             while counter[label] < k_shot:
+                if len(candidate_idx[label]) == 0:
+                    # if the number of entities for any label in the support set is less than k_shot
+                    # we should break the loop to sample another label
+                    break
                 idx = random.choice(candidate_idx[label])
                 support_set.add(idx)
                 candidate_idx[label].remove(idx)
@@ -374,13 +447,22 @@ class Processor:
 
         return dataset_subset
 
-    def preprocess(self, seed=22, k_shot=-1):
+    def tokenize_pad_data(self, instances):
+        """
+        Tokenize data and padding data.
+        :param instances: Instances to be processed. We tokenize the 'sentence' and 'tgt_sequence' columns.
+
+        :return:
+        """
+        inputs = self.tokenizer(instances['sentence'], truncation=True, padding=True)
+        labels = self.tokenizer(instances['tgt_sequence'], truncation=True, padding=True)
+        inputs['labels'] = labels['input_ids']  # get tgt_sequence's input_ids as labels
+        return inputs
+
+    def preprocess(self, seed=22):
         """
         Pre-process the dataset.
         :param seed: the seed for random sampling. If None, a random seed will be used.
-        :param k_shot: sample and return a k-shot support set.
-            If k_shot > 0, the support set will be returned as train split.
-            Else, the preprocessed dataset original train split will be returned .
         :return: the preprocessed dataset.
 
         """
@@ -394,7 +476,7 @@ class Processor:
 
         # 1. check and load the cached formatted dataset
         try:
-            logger.info('Try to load the preprocessed dataset from the cache...')
+            logger.info('Cache found. Load the preprocessed dataset from the cache...')
             dataset = load_from_disk(preprocessed_dir)
         except FileNotFoundError:
             logger.info('No cache found, start to preprocess the dataset...')
@@ -421,7 +503,8 @@ class Processor:
                 self.data_format_span,
                 batched=True,
                 batch_size=self.data_cfg['data_batch_size'],
-                num_proc=self.data_cfg['num_proc']
+                num_proc=self.data_cfg['num_proc'],
+                remove_columns=dataset['train'].column_names  # remove the original columns before adding new columns
             )
 
             # 3. shuffle, split
@@ -431,18 +514,21 @@ class Processor:
                 dataset['validation'] = valid_test_split['train']
                 dataset['test'] = valid_test_split['test']
 
-            # 4. check the cached result
+            # 4. check the cached the formated data
             if not os.path.exists(preprocessed_dir):
-                os.makedirs(self.data_cfg['preprocessed_dir'])
+                os.makedirs(preprocessed_dir)
             dataset.save_to_disk(preprocessed_dir)
 
-        # 2. sample the support set
-        if k_shot > 0:
+        # 5. sample the support set
+        if self.config.k_shot > 0:
+            # If k_shot > 0, the support set will be returned as train split.
+            # Else, the preprocessed dataset original train split will be returned.
+
             if not os.path.exists(ss_cache_dir):
                 os.makedirs(ss_cache_dir)
 
-            cache_ss_file_name = 'support_set_{}_shot.jsonl'.format(k_shot)
-            cache_counter_file_name = 'counter_{}_shot.txt'.format(k_shot)
+            cache_ss_file_name = 'support_set_{}_shot.jsonl'.format(self.config.k_shot)
+            cache_counter_file_name = 'counter_{}_shot.txt'.format(self.config.k_shot)
             support_set_file = os.path.join(ss_cache_dir, cache_ss_file_name)
             counter_file = os.path.join(ss_cache_dir, cache_counter_file_name)
 
@@ -450,17 +536,17 @@ class Processor:
             if not os.path.exists(support_set_file):
                 # sample support set from scratch
                 # get support set (only data index) and counter
-                support_set, counter = self.support_set_sampling(dataset, k_shot)
+                support_set, counter = self.support_set_sampling(dataset, self.config.k_shot)
 
                 # cache the support set
                 with jsonlines.open(support_set_file, mode='w') as writer:
                     for idx in support_set:
-                        tokens = dataset['train']['tokens'][idx]
+                        sentence = dataset['train']['sentence'][idx]
                         spans_labels = dataset['train']['spans_labels'][idx]
                         tgt_sequence = dataset['train']['tgt_sequence'][idx]
                         writer.write({
                             'id': idx,
-                            'tokens': tokens,
+                            'sentence': sentence,
                             'spans_labels': spans_labels,
                             'tgt_sequence': tgt_sequence,
                         })
@@ -477,6 +563,52 @@ class Processor:
                 # load_dataset return a DatasetDict, we need to get the 'train' split
                 support_set_data = load_dataset('json', data_files=support_set_file)['train']
 
-            dataset['train'] = support_set_data  # replace the original train split with the support set
+            dataset['train'] = support_set_data.remove_columns(['id'])  # replace the original train split with the support set
 
-        return dataset
+        # 6. augmentation (optional)
+        augment_method = {
+            'lsp': self.data_augmentation_by_lsp
+        }
+
+        if self.config.augmentation != 'baseline':
+            aug_processed_dir = os.path.join(
+                self.data_cfg['preprocessed_dir'],
+                f'span_{self.natural_flag}_{self.config.augmentation}'
+            )
+            try:
+                dataset = load_from_disk(aug_processed_dir)
+            except FileNotFoundError:
+                dataset = dataset.map(
+                    augment_method[self.config.augmentation],
+                    batched=True,
+                    batch_size=self.data_cfg['data_batch_size'],
+                    num_proc=self.data_cfg['num_proc'],
+                    remove_columns=dataset['train'].column_names  # remove the original columns before adding new columns
+                )
+                dataset.save_to_disk(aug_processed_dir)
+
+        # 7. tokenize and padding for training and evaluation
+        original_columns = dataset['train'].column_names  # store the original columns
+        dataset = dataset.map(self.tokenize_pad_data, batched=True)
+
+        # 8. get spans_labels, input_sents for metric computation
+        spans_labels = {
+            'train': dataset['train']['spans_labels'],
+            'validation': dataset['validation']['spans_labels'],
+            'test': dataset['test']['spans_labels']
+        }
+        input_sents = {
+            'train': dataset['train']['sentence'],
+            'validation': dataset['validation']['sentence'],
+            'test': dataset['test']['sentence']
+        }
+        extra_data = {
+            'span_labels': spans_labels,
+            'input_sents': input_sents
+        }
+
+        # 9. remove original columns.
+        # only keep input_ids, attention_mask, labels columns et.al. used to model forward.
+        dataset = dataset.remove_columns(original_columns)
+
+        return dataset, extra_data

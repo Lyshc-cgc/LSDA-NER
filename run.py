@@ -18,9 +18,19 @@ def main(cfg: DictConfig) -> None:
     # 0. init
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     func_util.set_seed(cfg.seed)
-    cfg.training_args.output_dir = cfg.training_args.output_dir.format(dataset=cfg.dataset.dataset_name, seed=cfg.seed)
-    cfg.training_args.seed = cfg.seed
-    cfg.training_args.run_name = cfg.training_args.run_name.format(dataset=cfg.dataset.dataset_name, seed=cfg.seed)
+    cfg.training_args.output_dir = cfg.training_args.output_dir.format(
+        aug_method=cfg.augmentation,
+        k_shot=cfg.k_shot,
+        dataset=cfg.dataset.dataset_name,
+        seed=cfg.seed
+    )  # ckpt and results path
+    cfg.training_args.seed = cfg.seed  # set seed for training
+    cfg.training_args.run_name = cfg.training_args.run_name.format(
+        aug_method=cfg.augmentation,
+        k_shot=cfg.k_shot,
+        dataset=cfg.dataset.dataset_name,
+        seed=cfg.seed
+    )  # wandb run name
     logger.info("*" * 20 + "Training Args" + "*" * 20)
     logger.info(OmegaConf.to_yaml(cfg))
     logger.info("*" * 50)
@@ -28,7 +38,7 @@ def main(cfg: DictConfig) -> None:
     # 1. model and tokenizer
     best_ckpt_path = os.path.join(cfg.training_args.output_dir, 'best_ckpt')
     if not os.path.exists(best_ckpt_path):  # best ckpt does not exist
-        logger.info('best checkpoint does not exist, load model from model_name_or_path')
+        logger.info('best checkpoint does not exist, load model from model_name_or_path for training from scratch...')
         model_name_or_path = cfg.model_name_or_path
         model = AutoModelForSeq2SeqLM.from_pretrained(model_name_or_path, trust_remote_code=True)
         tokenizer = AutoTokenizer.from_pretrained(model_name_or_path)
@@ -39,44 +49,9 @@ def main(cfg: DictConfig) -> None:
 
     # 2. data
     # 2.1 pre-process
-    processor = Processor(cfg.dataset, cfg.natural_label)
-    dataset = processor.preprocess(k_shot=cfg.k_shot)
-    original_columns = dataset['train'].column_names
-
-    # 2.2 tokenize and padding
-    def tokenize_pad_data(instances):
-        """
-        Tokenize data and padding data.
-        :param instances: Instances to be processed. We tokenize the 'tokens' and 'tgt_sequence' columns.
-
-        :return:
-        """
-        inputs = tokenizer(instances['tokens'], truncation=True, padding=True)
-        labels = tokenizer(instances['tgt_sequence'], truncation=True, padding=True)
-        inputs['labels'] = labels['input_ids']  # get tgt_sequence's input_ids as labels
-        return inputs
-
-    dataset = dataset.map(tokenize_pad_data, batched=True)
+    processor = Processor(cfg, tokenizer)
+    dataset, extra_data = processor.preprocess()
     dataset['validation'] = dataset['validation'].select(range(200))   # only use 200 samples for validation in training
-    dataset['test'] = dataset['test'].select(range(200))  # only use 200 samples for testing
-
-    # 2.3 get spans_labels, input_sents for metric computation
-    spans_labels = {
-        'train': dataset['train']['spans_labels'],
-        'validation': dataset['validation']['spans_labels'],
-        'test': dataset['test']['spans_labels']
-    }
-    input_sents = {
-        'train': dataset['train']['tokens'],
-        'validation': dataset['validation']['tokens'],
-        'test': dataset['test']['tokens']
-    }
-    extra_data = {
-        'span_labels': spans_labels,
-        'input_sents': input_sents
-    }
-    # 2.4 remove original columns
-    dataset = dataset.remove_columns(original_columns)
 
     # 3. data collator
     data_collator = DataCollatorForSeq2Seq(tokenizer=tokenizer)
@@ -107,11 +82,12 @@ def main(cfg: DictConfig) -> None:
         trainer.save_model(best_ckpt_path)  # automatically save the best ckpt
 
     # 7. evaluate the best ckpt
-    logger.info('start evaluating...')
-    eval_results = trainer.evaluate(eval_dataset=dataset['test'])
-    logger.info('save the evaluation results...')
-    trainer.log_metrics(split='test', metrics=eval_results)
-    trainer.save_metrics(split='test', metrics=eval_results)
+    if cfg.test:
+        logger.info('start evaluating...')
+        eval_results = trainer.evaluate(eval_dataset=dataset['test'])
+        logger.info(f'save the evaluation results to {cfg.training_args.output_dir}')
+        trainer.log_metrics(split='test', metrics=eval_results)
+        trainer.save_metrics(split='test', metrics=eval_results)
 
 if __name__ == "__main__":
     main()

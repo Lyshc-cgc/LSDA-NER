@@ -1,7 +1,7 @@
 # Attention! ALL paths must be relative to the 'run.py' file!
 
-dataset_name: mit_movies
-file_path: data/mit_movies/mit_movies
+dataset_name: mit_movie
+file_path: data/mit_movie/mit_movie
 num_proc: 4  # the number of processes to preprocess the data
 nested: False  # whether the entities are nested
 
@@ -9,9 +9,8 @@ nested: False  # whether the entities are nested
 tokens_field: tokens  # the field name of the tokens, please make sure the field name is consistent with the data
 ner_tags_field: ner_tags  # the field name of the NER tag, please make sure the field name is consistent with the data
 data_batch_size: 4096 # batch size for data processing
-shuffle: True  # whether to shuffle the data
-preprocessed_dir: data/mit_movies/preprocess  # the directory to store the preprocessed data
-ss_cache_dir: data/mit_movies/support_set  # the directory to store the support set cache
+preprocessed_dir: data/mit_movie/preprocess  # the directory to store the preprocessed data
+ss_cache_dir: data/mit_movie/support_set  # the directory to store the support set cache
 
 labels:
   ACTOR: actor

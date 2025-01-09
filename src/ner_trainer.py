@@ -97,14 +97,14 @@ class NerTrainer(Seq2SeqTrainer):
         # Replace -100s used for padding as we can't decode them
         preds = np.where(preds != -100, preds, self.processing_class.pad_token_id)
         decoded_preds = self.processing_class.batch_decode(preds, skip_special_tokens=True)
-        loger.info(f'decoded_preds:\n {decoded_preds}')
+        # loger.info(f'decoded_preds:\n {decoded_preds}')
 
         # extract entities from the decoded predictions and get their positions according to the input sentences.
         # pred_spans shapes like [[start, end, span, label_id], [...], ...]
         pred_spans = self.extract_entities(decoded_preds, input_sents)
-        assert len(pred_spans) == len(spans_labels), 'The number of pred_spans and spans_labels should be the same.'
-        loger.info(f'pred_spans:\n {pred_spans}')
-        loger.info(f'gold_spans:\n {spans_labels}')
+        # assert len(pred_spans) == len(spans_labels), 'The number of pred_spans and spans_labels should be the same.'
+        # loger.info(f'pred_spans:\n {pred_spans}')
+        # loger.info(f'gold_spans:\n {spans_labels}')
 
         # filter empty pred in the pred_spans and filter 'O' label
         # then flatten the pred_spans

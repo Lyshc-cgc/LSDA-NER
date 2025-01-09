@@ -268,12 +268,12 @@ def find_span(text: str, span: str):
 
     return res_spans
 
-def get_label_subsets(labels, sub_size, repeat_num=1, fixed_subsets=None):
+def get_label_subsets(labels, sub_size, partition_times=1, fixed_subsets=None):
     """
     Get the subsets of the labels.
     :param labels: list, the list of labels.
     :param sub_size: int or float (<1), the size of the label subset.
-    :param repeat_num: the number of times to repeat each label.
+    :param partition_times: the number of times to partition each label.
     :param fixed_subsets: a list of lists or tuples, the fixed subsets. we randomly sample the rest of the labels. e.g., [['PER', 'ORG'], ['LOC', 'GPE'],...]
     :return: list, the list of subsets.
     """
@@ -283,7 +283,7 @@ def get_label_subsets(labels, sub_size, repeat_num=1, fixed_subsets=None):
             sub_size = 1
 
     label_subsets = []
-    for _ in range(repeat_num):
+    for _ in range(partition_times):
         random.shuffle(labels)
         if fixed_subsets:
             labels = [l for l in labels if l not in fixed_subsets]  # filter out labels in the fixed subsets
@@ -328,43 +328,3 @@ def remove_duplicated_label_sets(label_sets: list):
                 duplicated_id.append(j)
     label_sets = [label_sets[i] for i in range(len(label_sets)) if i not in duplicated_id]
     return label_sets
-
-def compute_lspi(label_sets: list):
-    """
-    compute the label space per instance (LSPI). This metric is used to evaluate the diversity of the labels.
-    :param label_sets: the label_sets to be evaluated in demonstrations. It is shaped like [label_set1, label_set2, ...].
-        the label set i is shaped like [label1, label2,...]
-    :return:
-    """
-    instances_num = len(label_sets)
-
-    # remove the duplicated label sets
-    label_sets = remove_duplicated_label_sets(label_sets)
-
-    # compute the label space per instance (LSPI)
-    label_space = len(label_sets)
-    lspi = label_space/instances_num
-    return lspi
-
-def compute_label_coverage(label_sets: list, gold_label_sets: list):
-    """
-    Compute the label coverage (LC). This metric is used to evaluate the coverage of labels from the demonstrations over golden labels.
-    :param label_sets: the label sets to be evaluated in demonstrations. It is shaped like [label_set1, label_set2, ...].
-        the label set i is shaped like [label1, label2,...]
-    :param gold_label_sets: the golden label sets from the test set. It is shaped like [gold_label_set1, gold_label_set2,...].
-        the gold label set i is shaped like [gold_label1, gold_label2,...]
-    :return:
-    """
-    # remove the duplicated label sets
-    label_sets = remove_duplicated_label_sets(label_sets)
-    gold_label_sets = remove_duplicated_label_sets(gold_label_sets)
-
-    # compute the label cover (LC)
-    cover_num = 0
-    for label_set in label_sets:
-        if label_set in gold_label_sets:
-            cover_num += 1
-    label_coverage = cover_num/len(gold_label_sets)
-    union_label_sets = label_sets + gold_label_sets
-    # label_coverage1 = cover_num/len(union_label_sets)
-    return label_coverage
