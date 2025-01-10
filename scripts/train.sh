@@ -14,7 +14,13 @@ for dataset in "${datasets[@]}"; do
       echo "Running run.py with dataset: $dataset, k_shot: $k_shot, seed: $seed, augmentation: $augmentation"
       # using CLI from hydra to run the model with different datasets and seeds
       # https://hydra.cc/docs/tutorials/basic/your_first_app/config_file/
-      python run.py train=$train test=$test dataset=$dataset k_shot=$k_shot training_args="${k_shot}_shot" seed=$seed augmentation=$augmentation
+      python run.py train=$train \
+      test=$test \
+      dataset=$dataset \
+      k_shot=$k_shot \
+      training_args="${k_shot}_shot" \
+      seed=$seed \
+      augmentation=$augmentation
     done
   done
 done

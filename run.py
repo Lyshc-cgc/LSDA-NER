@@ -18,6 +18,9 @@ def main(cfg: DictConfig) -> None:
     # 0. init
     os.environ["TOKENIZERS_PARALLELISM"] = "false"
     func_util.set_seed(cfg.seed)
+    # if use negative sampling, add post fix '_neg' to the name of augmentation method
+    negative_sample = '_neg' if cfg.negative else ''
+    cfg.augmentation = cfg.augmentation + negative_sample
     cfg.training_args.output_dir = cfg.training_args.output_dir.format(
         aug_method=cfg.augmentation,
         k_shot=cfg.k_shot,

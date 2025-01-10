@@ -26,6 +26,8 @@ class NerTrainer(Seq2SeqTrainer):
         """
         entities = []  # store the entities in a batch
         for sent, decoded_pred in zip(input_sents, decoded_preds):
+            if decoded_pred == '':
+                continue
             results = decoded_pred.split('|')
             instance_entities = []  # store the entities in a sentence
             for res in results:  # split the result by '|' to get the entities.

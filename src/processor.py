@@ -232,7 +232,7 @@ class Processor:
         # an element of instances is a dict, containing the id, tokens, spans_labels and tgt_sequence
         for raw_sentence, raw_spans_labels, raw_tgt_sequence in zip(instances['sentence'], instances['spans_labels'], instances['tgt_sequence']):
             # add all labels
-            res_sents.append(raw_sentence + ' [all]')
+            res_sents.append(raw_sentence + ' [' + ','.join(all_labels) + ']')
             res_spans_labels.append(raw_spans_labels)
             res_tgt_sequence.append(raw_tgt_sequence)
 
@@ -242,7 +242,7 @@ class Processor:
                 spans_labels = []  # store the spans and labels using label subset partition
                 tokens = copy.deepcopy(raw_sentence)  # store the tokens using label subset partition
 
-                # the elements' shape of spans_labels is like [(start, end (excluded), gold_mention_span, gold_label_id)...]
+                # the elements' shape of raw_spans_labels is like [(start, end (excluded), gold_mention_span, gold_label_id)...]
                 # start, end (excluded), gold_mention_span, gold_label_id are all strings
                 for start, end, mention, label_id in raw_spans_labels:
                     # an element in instance_spans_labels is like (start, end (excluded), gold_mention_span, gold_label_id)
@@ -250,7 +250,7 @@ class Processor:
                     if label in label_subset:
                         tgt_sequence += '{}, {}| '.format(mention, label)
                         spans_labels.append((start, end, mention, label_id))
-                if len(spans_labels) == 0:
+                if not self.config.negative and len(spans_labels) == 0:  # not using negative sampling
                     continue
                 tokens += ' [' + ' '.join(label_subset) + ']' # concat label subset to the tokens
                 res_sents.append(tokens)
@@ -566,10 +566,6 @@ class Processor:
             dataset['train'] = support_set_data.remove_columns(['id'])  # replace the original train split with the support set
 
         # 6. augmentation (optional)
-        augment_method = {
-            'lsp': self.data_augmentation_by_lsp
-        }
-
         if self.config.augmentation != 'baseline':
             aug_processed_dir = os.path.join(
                 self.data_cfg['preprocessed_dir'],
@@ -579,7 +575,7 @@ class Processor:
                 dataset = load_from_disk(aug_processed_dir)
             except FileNotFoundError:
                 dataset = dataset.map(
-                    augment_method[self.config.augmentation],
+                    self.data_augmentation_by_lsp,
                     batched=True,
                     batch_size=self.data_cfg['data_batch_size'],
                     num_proc=self.data_cfg['num_proc'],
