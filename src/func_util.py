@@ -268,12 +268,12 @@ def find_span(text: str, span: str):
 
     return res_spans
 
-def get_label_subsets(labels, sub_size, partition_times=1, fixed_subsets=None):
+def get_label_subsets(labels, sub_size, partition_time=1, fixed_subsets=None):
     """
     Get the subsets of the labels.
     :param labels: list, the list of labels.
     :param sub_size: int or float (<1), the size of the label subset.
-    :param partition_times: the number of times to partition each label.
+    :param partition_time: the number of times to partition each label.
     :param fixed_subsets: a list of lists or tuples, the fixed subsets. we randomly sample the rest of the labels. e.g., [['PER', 'ORG'], ['LOC', 'GPE'],...]
     :return: list, the list of subsets.
     """
@@ -283,7 +283,7 @@ def get_label_subsets(labels, sub_size, partition_times=1, fixed_subsets=None):
             sub_size = 1
 
     label_subsets = []
-    for _ in range(partition_times):
+    for _ in range(partition_time):
         random.shuffle(labels)
         if fixed_subsets:
             labels = [l for l in labels if l not in fixed_subsets]  # filter out labels in the fixed subsets
