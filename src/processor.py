@@ -427,10 +427,9 @@ class Processor:
         inputs['labels'] = labels['input_ids']  # get tgt_sequence's input_ids as labels
         return inputs
 
-    def preprocess(self, seed=22):
+    def preprocess(self):
         """
         Pre-process the dataset.
-        :param seed: the seed for random sampling. If None, a random seed will be used.
         :return: the preprocessed dataset.
 
         """
@@ -471,7 +470,7 @@ class Processor:
             # 3. shuffle, split
             if 'validation' in dataset.keys() and 'test' not in dataset.keys():
                 # split the origianl 'valid' dataset into 'valid' and 'test' datasets
-                valid_test_split = dataset['validation'].train_test_split(test_size=0.5, seed=seed)
+                valid_test_split = dataset['validation'].train_test_split(test_size=0.5, seed=self.config.seed)
                 dataset['validation'] = valid_test_split['train']
                 dataset['test'] = valid_test_split['test']
 
@@ -534,7 +533,7 @@ class Processor:
             aug_processed_dir = os.path.join(
                 self.data_cfg['preprocessed_dir'],
                 f'span_{self.natural_flag}_{self.config.augmentation}',
-                f'{self.config.k_shot}-shot_{seed}'
+                f'{self.config.k_shot}-shot_{self.config.seed}'
             )
             try:
                 dataset = load_from_disk(aug_processed_dir)
