@@ -1,16 +1,17 @@
 train: true
 test: false
-k_shot: 50  # if > 0, use k-shot learning
+k_shot: 50  # if > 0, use k-shot learning. if k_shot = -1, use full supervised learning
 seed: 22
 model_name_or_path: ./model/facebook/bart-large  # facebook/bart-large
 natural_label: False  # whether to use the natural label
 early_stopping_patience: 5  # early stopping patience
-augmentation: lsp  # lsp, baseline
+augmentation: lsp  # lsp, baseline, ~
 subset_size: 0.5  # subset size
-partition_times: 1  # partition times
-negative: True  # whether to use negative examples(i.e., empty target sequence)
+partition_time: 1  # partition times
+# The ratio of negative instances to positive instances. if negative_portion > 0, use negative examples(i.e., empty target sequence)
+negative_portion: 0
 
 defaults:
   - _self_
-  - dataset: mit_movie
+  - dataset: conll2003
   - training_args: 5_shot

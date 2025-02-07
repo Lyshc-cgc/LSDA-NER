@@ -34,11 +34,11 @@ class Processor:
         self.label2id = dict()
         self.id2label = dict()
         self.covert_tag2id = dict() if self.raw_bio else None  # covert the original BIO label (tag) id to the new label id. e.g., {2:2,3:2} means 2 (B-DATE) and 3 (I-DATE) are the same (DATE, id=2).
-        if self.config.natural_label:  # use natural-language-form labels
+        if self.config.natural_label:  # use natural-language-form labels. e.g., person, location, organization.
             self.init_natural_labels()
-        else:  # use simple-form labels
+        else:  # use simple-form labels. e.g., person -> PER, location -> LOC, organization -> ORG.
             self.init_simp_labels()
-        self.natural_flag = 'natural' if self.config.natural_label else 'bio'  # use natural-form or bio-form
+        self.natural_flag = 'natu' if self.config.natural_label else 'simp'  # use natural-form or bio-form
 
     def init_simp_labels(self):
         """
@@ -206,11 +206,9 @@ class Processor:
         res_sents = []  # store the sentences of the instances
         res_spans_labels = []  # store the gold spans and labels of the instances
         res_tgt_sequence = []  # store the target sequence of the instances
+        negative_instances = []  # store the negative instances
 
         # 1. get label subset if we use 'label_subset' augmentation
-        assert 'subset_size' in self.config and 'partition_times' in self.config, \
-            '"subset_size" and "partition_times" should be provided in the kwargs for label subset partition.' \
-            'Please check the specify "subset_size" and "partition_times" parameters in config file or command line.'
 
         all_labels = list(self.label2id.keys())
         if 'O' in all_labels:
@@ -225,14 +223,17 @@ class Processor:
         label_subsets = func_util.get_label_subsets(
             all_labels,
             subset_size,
-            self.config['partition_times']
+            self.config['partition_time']
         )
 
         # 2. process each instance
         # an element of instances is a dict, containing the id, tokens, spans_labels and tgt_sequence
         for raw_sentence, raw_spans_labels, raw_tgt_sequence in zip(instances['sentence'], instances['spans_labels'], instances['tgt_sequence']):
             # add all labels
-            res_sents.append(raw_sentence + ' [' + ','.join(all_labels) + ']')
+            if '_all' in self.config.augmentation:  # add all labels
+                res_sents.append(raw_sentence + ' [all]')
+            else:
+                res_sents.append(raw_sentence + ' [' + ','.join(all_labels) + ']')
             res_spans_labels.append(raw_spans_labels)
             res_tgt_sequence.append(raw_tgt_sequence)
 
@@ -250,9 +251,21 @@ class Processor:
                     if label in label_subset:
                         tgt_sequence += '{}, {}| '.format(mention, label)
                         spans_labels.append((start, end, mention, label_id))
-                if not self.config.negative and len(spans_labels) == 0:  # not using negative sampling
+                if self.config.negative_portion == 0  and len(spans_labels) == 0:  # not using negative sampling
                     continue
                 tokens += ' [' + ' '.join(label_subset) + ']' # concat label subset to the tokens
+                if tgt_sequence == '':  # negative instances
+                    negative_instances.append((tokens, spans_labels, tgt_sequence))
+                else:  # positive instances
+                    res_sents.append(tokens)
+                    res_spans_labels.append(spans_labels)
+                    res_tgt_sequence.append(tgt_sequence)
+
+        # add negative instances
+        if self.config.negative_portion > 0:
+            negative_num = math.floor(len(res_tgt_sequence) * self.config.negative_portion)
+            random.shuffle(negative_instances)
+            for tokens, spans_labels, tgt_sequence in negative_instances[:negative_num]:
                 res_sents.append(tokens)
                 res_spans_labels.append(spans_labels)
                 res_tgt_sequence.append(tgt_sequence)
@@ -341,6 +354,12 @@ class Processor:
         else:
             dataset = dataset[sample_split]
 
+        # add index column
+        dataset = dataset.map(
+            lambda example, index: {"id": index},
+            with_indices=True
+        )
+
         label_nums = self.statistics(dataset)['label_nums']  # count the number of entities for each label
         label_nums = dict(sorted(label_nums.items(), key=lambda x: x[1], reverse=False))  # sort the labels by the number of entities by ascending order
 
@@ -396,57 +415,6 @@ class Processor:
         counter = _update_counter(support_set, counter)
         return support_set, counter
 
-    def subset_sampling(self, dataset: Dataset, size=200, sampling_strategy='random', seed=None):
-        """
-        Get the subset of the dataset according to sampling sampling_strategy.
-        :param dataset: the dataset to be sampled to get subset.
-        :param size: the size of the test subset.
-        :param sampling_strategy: the sampling strategy.
-            1) 'random' for random sampling. Select instances randomly. Each instance has the same probability of being selected.
-            2) 'lab_uniform' for uniform sampling at label-level. Choice probability is uniform for each label.
-            3) 'proportion' for proportion sampling. Choice probability is proportional to the number of entities for each label.
-            4) 'shot_sample' for sampling test set like k-shot sampling. Each label has at least k instances.
-        :param seed: the seed for random sampling. If None, a random seed will be used.
-        :return:
-        """
-        assert sampling_strategy in ('random', 'lab_uniform', 'proportion', 'shot_sample')
-
-        if sampling_strategy == 'random':
-            if not seed or isinstance(seed, str):
-                seed = random.randint(0, 512)
-            logger.info(f"Random sampling with seed {seed}...")
-            # https://huggingface.co/docs/datasets/process#shuffle
-            # use Dataset.flatten_indices() to rewrite the entire dataset on your disk again to remove the indices mapping
-            dataset_subset = dataset.shuffle(seed=seed).flatten_indices().select(range(size))
-
-        elif sampling_strategy == 'proportion':
-            statistics_res = self.statistics(dataset)
-            label_dist,  label_indices= statistics_res['label_dist'], statistics_res['label_indices']
-            choice_indices = []
-            for label, proportion in label_dist.items():
-                choice_num = math.ceil(proportion * size)
-                choice_indices += random.sample(label_indices[label], choice_num)
-
-            choice_indices = list(set(choice_indices))
-            dataset_subset = dataset.select(choice_indices)
-
-        elif sampling_strategy == 'lab_uniform':
-            label_num = len(self.label2id.keys()) - 1  # exclude 'O' label
-            statistics_res = self.statistics(dataset)
-            label_indices = statistics_res['label_indices']
-            choice_indices = []
-            for label, indices in label_indices.items():
-                choice_num = math.ceil(size / label_num)
-                choice_indices += random.sample(indices, choice_num)
-            choice_indices = list(set(choice_indices))
-            dataset_subset = dataset.select(choice_indices)
-
-        elif sampling_strategy == 'shot_sample':
-            support_set, counter = self.support_set_sampling(dataset, k_shot=20, sample_split='train')
-            dataset_subset = dataset.select(list(support_set))
-
-        return dataset_subset
-
     def tokenize_pad_data(self, instances):
         """
         Tokenize data and padding data.
@@ -467,19 +435,18 @@ class Processor:
 
         """
         # 0. init config
-        preprocessed_dir = os.path.join(self.data_cfg['preprocessed_dir'], f'span_{self.natural_flag}')
-        ss_cache_dir = os.path.join(self.data_cfg['ss_cache_dir'], f'span_{self.natural_flag}')  # the directory to cache the support set
-
         # set 'spawn' start method in the main process to parallelize computation across several GPUs when using multi-processes in the map function
         # refer to https://huggingface.co/docs/datasets/process#map
         multiprocess.set_start_method('spawn')
 
         # 1. check and load the cached formatted dataset
+        # all method variants will use this formatted dataset
+        preprocessed_dir = os.path.join(self.data_cfg['preprocessed_dir'],f'span_{self.natural_flag}' )
         try:
-            logger.info('Cache found. Load the preprocessed dataset from the cache...')
+            logger.info('Dataset cache found. Load the preprocessed dataset from the cache...')
             dataset = load_from_disk(preprocessed_dir)
         except FileNotFoundError:
-            logger.info('No cache found, start to preprocess the dataset...')
+            logger.info('No dataset cache found, start to preprocess the dataset...')
 
             # 2. preprocess data
             # load dataset
@@ -492,13 +459,7 @@ class Processor:
                 dataset = dataset.filter(
                     lambda x: len(x[tokens_filed]) == len(x[ner_tags_field]))
 
-            # 2.2. add index column
-            dataset = dataset.map(
-                lambda example, index: {"id": index},
-                with_indices=True
-            )
-
-            # 2.3. format the spans and labels
+            # 2.2. format the spans and labels
             dataset = dataset.map(
                 self.data_format_span,
                 batched=True,
@@ -520,6 +481,8 @@ class Processor:
             dataset.save_to_disk(preprocessed_dir)
 
         # 5. sample the support set
+        # all method variants using different k-shot settings will use the same k-shot support set
+        ss_cache_dir = os.path.join(self.data_cfg['ss_cache_dir'], f'span_{self.natural_flag}')  # the directory to cache the support set
         if self.config.k_shot > 0:
             # If k_shot > 0, the support set will be returned as train split.
             # Else, the preprocessed dataset original train split will be returned.
@@ -563,13 +526,15 @@ class Processor:
                 # load_dataset return a DatasetDict, we need to get the 'train' split
                 support_set_data = load_dataset('json', data_files=support_set_file)['train']
 
-            dataset['train'] = support_set_data.remove_columns(['id'])  # replace the original train split with the support set
+            # replace the original train split with the support set
+            dataset['train'] = support_set_data.remove_columns(['id'])  # delete the 'id' column
 
         # 6. augmentation (optional)
-        if self.config.augmentation != 'baseline':
+        if self.config.augmentation.startswith('lsp'):
             aug_processed_dir = os.path.join(
                 self.data_cfg['preprocessed_dir'],
-                f'span_{self.natural_flag}_{self.config.augmentation}'
+                f'span_{self.natural_flag}_{self.config.augmentation}',
+                f'{self.config.k_shot}-shot_{seed}'
             )
             try:
                 dataset = load_from_disk(aug_processed_dir)
@@ -584,7 +549,7 @@ class Processor:
                 dataset.save_to_disk(aug_processed_dir)
 
         # 7. tokenize and padding for training and evaluation
-        original_columns = dataset['train'].column_names  # store the original columns
+        original_columns = dataset['train'].column_names  # store the original columns, i.e., ['sentence', 'spans_labels', 'tgt_sequence']
         dataset = dataset.map(self.tokenize_pad_data, batched=True)
 
         # 8. get spans_labels, input_sents for metric computation
